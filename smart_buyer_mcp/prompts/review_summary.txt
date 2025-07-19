@@ -1,0 +1,2 @@
+Summarize the following product reviews in 3-5 bullet points, focusing on pros, cons, and overall sentiment:
+{reviews} 
