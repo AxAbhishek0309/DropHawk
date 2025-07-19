@@ -6,5 +6,9 @@
   {
     "url": "https://www.flipkart.com/sample-product/p/itm123456",
     "threshold": 799.0
+  },
+  {
+    "url": "https://www.amazon.in/dp/B08N5WRWNW",
+    "threshold": 1500.0
   }
 ] 
