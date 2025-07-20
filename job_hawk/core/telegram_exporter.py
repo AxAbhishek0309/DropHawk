@@ -1,11 +1,15 @@
 import requests
 import os
 from typing import Dict
+from dotenv import load_dotenv
 
 class TelegramExporter:
     def __init__(self):
+        load_dotenv()
         self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        print(f"[DEBUG] TELEGRAM_BOT_TOKEN: {self.bot_token}")
+        print(f"[DEBUG] TELEGRAM_CHAT_ID: {self.chat_id}")
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
     
     def export_decision(self, deal: Dict):

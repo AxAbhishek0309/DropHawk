@@ -1,8 +1,8 @@
 import asyncio
 from typing import List, Dict
 from playwright.async_api import async_playwright
-from core.scraper import get_product_info
-from core.live_scraper import LiveDealScraper
+from .scraper import get_product_info
+from .live_scraper import LiveDealScraper
 
 class DealFinder:
     def __init__(self):

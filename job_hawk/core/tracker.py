@@ -1,5 +1,5 @@
 from apscheduler.schedulers.background import BackgroundScheduler
-from core.scraper import get_product_info
+from .scraper import get_product_info
 
 class PriceTracker:
     def __init__(self, watcher):

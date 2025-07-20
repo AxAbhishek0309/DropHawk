@@ -871,3 +871,344 @@ class LiveDealScraper:
                 await browser.close()
         
         return best_sellers 
+
+class JobListingScraper:
+    """Scrapes job/internship/competition listings from various platforms."""
+    def __init__(self):
+        self.last_run_time = None  # To be set by scheduler
+
+    def fetch_linkedin_jobs(self, keywords, since_time):
+        """Fetch jobs from LinkedIn matching keywords, posted after since_time."""
+        import requests
+        from bs4 import BeautifulSoup
+        from datetime import datetime, timedelta
+        import re
+        listings = []
+        base_url = "https://www.linkedin.com/jobs/search/"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        for keyword in keywords:
+            params = {
+                'keywords': keyword,
+                'location': 'India',
+                'f_TPR': 'r86400',  # posted in last 24 hours
+                'f_E': '2,3',  # Entry level, Internship
+                'trk': 'public_jobs_jobs-search-bar_search-submit',
+            }
+            try:
+                response = requests.get(base_url, params=params, headers=headers, timeout=15)
+                if response.status_code != 200:
+                    continue
+                soup = BeautifulSoup(response.content, 'html.parser')
+                job_cards = soup.find_all('li', class_=re.compile(r'jobs-search-results__list-item'))
+                for card in job_cards:
+                    try:
+                        title_el = card.find('h3')
+                        company_el = card.find('h4')
+                        location_el = card.find('span', class_=re.compile(r'job-search-card__location'))
+                        link_el = card.find('a', href=True)
+                        posted_time_el = card.find('time')
+                        title = title_el.get_text(strip=True) if title_el else ''
+                        company = company_el.get_text(strip=True) if company_el else ''
+                        location = location_el.get_text(strip=True) if location_el else ''
+                        link = link_el['href'] if link_el else ''
+                        posted_time = posted_time_el['datetime'] if posted_time_el and posted_time_el.has_attr('datetime') else ''
+                        # Parse posted_time to datetime
+                        posted_dt = None
+                        if posted_time:
+                            try:
+                                posted_dt = datetime.fromisoformat(posted_time.replace('Z', '+00:00'))
+                            except:
+                                posted_dt = None
+                        if posted_dt and posted_dt < since_time:
+                            continue  # Skip old jobs
+                        # Work type (Remote/Onsite/Hybrid) - LinkedIn may have a tag
+                        work_type = ''
+                        tag_els = card.find_all('span', class_=re.compile(r'job-search-card__job-insight'))
+                        tags = [keyword.lower()]
+                        for tag_el in tag_els:
+                            tag_text = tag_el.get_text(strip=True)
+                            if any(x in tag_text.lower() for x in ['remote', 'onsite', 'hybrid']):
+                                work_type = tag_text
+                            tags.append(tag_text.lower())
+                        listings.append({
+                            'title': title,
+                            'company': company,
+                            'location': location,
+                            'work_type': work_type,
+                            'posted_time': posted_time,
+                            'deadline': '',
+                            'link': link,
+                            'tags': list(set(tags)),
+                            'source': 'LinkedIn',
+                        })
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        print(f"[DEBUG] LinkedIn: {len(listings)} jobs fetched.")
+        return listings
+
+    def fetch_unstop_events(self, since_time):
+        """Fetch new hackathons, sprints, competitions from Unstop posted after since_time."""
+        import requests
+        from bs4 import BeautifulSoup
+        from datetime import datetime
+        import re
+        listings = []
+        base_url = "https://unstop.com/competitions"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        try:
+            response = requests.get(base_url, headers=headers, timeout=15)
+            if response.status_code != 200:
+                return []
+            soup = BeautifulSoup(response.content, 'html.parser')
+            event_cards = soup.find_all('div', class_=re.compile(r'event-card|competition-card'))
+            for card in event_cards:
+                try:
+                    title_el = card.find('h3')
+                    org_el = card.find('div', class_=re.compile(r'organizer|org-name'))
+                    deadline_el = card.find('span', class_=re.compile(r'deadline|end-date'))
+                    team_size_el = card.find('span', class_=re.compile(r'team-size|team'))
+                    eligibility_el = card.find('span', class_=re.compile(r'eligibility|criteria'))
+                    link_el = card.find('a', href=True)
+                    title = title_el.get_text(strip=True) if title_el else ''
+                    company = org_el.get_text(strip=True) if org_el else ''
+                    deadline = deadline_el.get_text(strip=True) if deadline_el else ''
+                    team_size = team_size_el.get_text(strip=True) if team_size_el else ''
+                    eligibility = eligibility_el.get_text(strip=True) if eligibility_el else ''
+                    link = link_el['href'] if link_el else ''
+                    # Parse deadline to datetime if possible
+                    deadline_dt = None
+                    if deadline:
+                        try:
+                            deadline_dt = datetime.strptime(deadline, '%d %b %Y, %I:%M %p')
+                        except:
+                            deadline_dt = None
+                    # Only include if deadline is after now
+                    if deadline_dt and deadline_dt < datetime.now():
+                        continue
+                    # Only include if posted after since_time (Unstop may not show posted time, so skip if not available)
+                    tags = ['hackathon', 'competition', 'unstop']
+                    if team_size:
+                        tags.append('team')
+                    if eligibility:
+                        tags.append(eligibility.lower())
+                    listings.append({
+                        'title': title,
+                        'company': company,
+                        'location': '',
+                        'work_type': '',
+                        'posted_time': '',
+                        'deadline': deadline,
+                        'team_size': team_size,
+                        'eligibility': eligibility,
+                        'link': link,
+                        'tags': list(set(tags)),
+                        'source': 'Unstop',
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            return []
+        print(f"[DEBUG] Unstop: {len(listings)} events fetched.")
+        return listings
+
+    def fetch_internshala_internships(self, keywords, since_time):
+        """Fetch internships from Internshala matching keywords, posted after since_time."""
+        import requests
+        from bs4 import BeautifulSoup
+        from datetime import datetime
+        import re
+        listings = []
+        base_url = "https://internshala.com/internships/keywords-{}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        for keyword in keywords:
+            url = base_url.format(keyword.replace(' ', '-').lower())
+            try:
+                response = requests.get(url, headers=headers, timeout=15)
+                if response.status_code != 200:
+                    continue
+                soup = BeautifulSoup(response.content, 'html.parser')
+                cards = soup.find_all('div', class_=re.compile(r'internship_meta'))
+                for card in cards:
+                    try:
+                        # Try to get the parent card for more info
+                        parent = card.find_parent('div', class_='individual_internship')
+                        title_el = parent.find('div', class_='heading_4_5') if parent else card.find_previous('div', class_='heading_4_5')
+                        company_el = parent.find('a', class_='link_display_like_text') if parent else card.find_previous('a', class_='link_display_like_text')
+                        location_el = card.find('a', class_='location_link')
+                        posted_time_el = card.find('div', class_='status')
+                        link_el = parent.find('a', href=True) if parent else card.find_previous('a', href=True)
+                        title = title_el.get_text(strip=True) if title_el else ''
+                        company = company_el.get_text(strip=True) if company_el else ''
+                        location = location_el.get_text(strip=True) if location_el else ''
+                        link = 'https://internshala.com' + link_el['href'] if link_el and link_el['href'].startswith('/') else (link_el['href'] if link_el else '')
+                        posted_time = posted_time_el.get_text(strip=True) if posted_time_el else ''
+                        # Parse posted_time to datetime if possible (e.g., 'Posted 1 day ago')
+                        posted_dt = None
+                        if posted_time:
+                            m = re.search(r'(\d+) day', posted_time)
+                            if m:
+                                days_ago = int(m.group(1))
+                                posted_dt = datetime.now() - timedelta(days=days_ago)
+                            elif 'today' in posted_time.lower():
+                                posted_dt = datetime.now()
+                        if posted_dt and posted_dt < since_time:
+                            continue
+                        tags = [keyword.lower(), 'internship']
+                        listings.append({
+                            'title': title,
+                            'company': company,
+                            'location': location,
+                            'work_type': '',
+                            'posted_time': posted_time,
+                            'deadline': '',
+                            'link': link,
+                            'tags': list(set(tags)),
+                            'source': 'Internshala',
+                        })
+                    except Exception as e:
+                        print(f"[DEBUG] Internshala: Error parsing card: {e}")
+                        continue
+            except Exception as e:
+                print(f"[DEBUG] Internshala: Error fetching {url}: {e}")
+                continue
+        print(f"[DEBUG] Internshala: {len(listings)} internships fetched.")
+        return listings
+
+    def fetch_cuvette_roles(self, keywords, since_time):
+        """Fetch internships/junior roles from Cuvette matching keywords, posted after since_time."""
+        import requests
+        from bs4 import BeautifulSoup
+        from datetime import datetime
+        import re
+        listings = []
+        base_url = "https://www.cuvette.tech/jobs?search={}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        for keyword in keywords:
+            url = base_url.format(keyword.replace(' ', '%20'))
+            try:
+                response = requests.get(url, headers=headers, timeout=15)
+                if response.status_code != 200:
+                    continue
+                soup = BeautifulSoup(response.content, 'html.parser')
+                cards = soup.find_all('div', class_=re.compile(r'job-card|job-listing'))
+                for card in cards:
+                    try:
+                        title_el = card.find('h3')
+                        company_el = card.find('span', class_=re.compile(r'company|org'))
+                        location_el = card.find('span', class_=re.compile(r'location'))
+                        posted_time_el = card.find('span', class_=re.compile(r'post-time|posted'))
+                        link_el = card.find('a', href=True)
+                        title = title_el.get_text(strip=True) if title_el else ''
+                        company = company_el.get_text(strip=True) if company_el else ''
+                        location = location_el.get_text(strip=True) if location_el else ''
+                        link = 'https://www.cuvette.tech' + link_el['href'] if link_el and link_el['href'].startswith('/') else (link_el['href'] if link_el else '')
+                        posted_time = posted_time_el.get_text(strip=True) if posted_time_el else ''
+                        # Parse posted_time to datetime if possible (e.g., '2 days ago')
+                        posted_dt = None
+                        if posted_time:
+                            m = re.search(r'(\d+) day', posted_time)
+                            if m:
+                                days_ago = int(m.group(1))
+                                posted_dt = datetime.now() - timedelta(days=days_ago)
+                            elif 'today' in posted_time.lower():
+                                posted_dt = datetime.now()
+                        if posted_dt and posted_dt < since_time:
+                            continue
+                        tags = [keyword.lower(), 'cuvette']
+                        listings.append({
+                            'title': title,
+                            'company': company,
+                            'location': location,
+                            'work_type': '',
+                            'posted_time': posted_time,
+                            'deadline': '',
+                            'link': link,
+                            'tags': list(set(tags)),
+                            'source': 'Cuvette',
+                        })
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        print(f"[DEBUG] Cuvette: {len(listings)} roles fetched.")
+        return listings
+
+    def fetch_wellfound_roles(self, keywords, since_time):
+        """Fetch internships/junior roles from Wellfound matching keywords, posted after since_time."""
+        import requests
+        from bs4 import BeautifulSoup
+        from datetime import datetime
+        import re
+        listings = []
+        base_url = "https://wellfound.com/jobs?keywords={}&remote=true"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        for keyword in keywords:
+            url = base_url.format(keyword.replace(' ', '%20'))
+            try:
+                response = requests.get(url, headers=headers, timeout=15)
+                if response.status_code != 200:
+                    continue
+                soup = BeautifulSoup(response.content, 'html.parser')
+                cards = soup.find_all('div', class_=re.compile(r'job-listing|styles_jobListing'))
+                for card in cards:
+                    try:
+                        title_el = card.find('div', class_=re.compile(r'title|styles_title'))
+                        company_el = card.find('div', class_=re.compile(r'company|styles_companyName'))
+                        location_el = card.find('div', class_=re.compile(r'location|styles_location'))
+                        posted_time_el = card.find('div', class_=re.compile(r'posted|styles_postedAt'))
+                        link_el = card.find('a', href=True)
+                        title = title_el.get_text(strip=True) if title_el else ''
+                        company = company_el.get_text(strip=True) if company_el else ''
+                        location = location_el.get_text(strip=True) if location_el else ''
+                        link = 'https://wellfound.com' + link_el['href'] if link_el and link_el['href'].startswith('/') else (link_el['href'] if link_el else '')
+                        posted_time = posted_time_el.get_text(strip=True) if posted_time_el else ''
+                        # Parse posted_time to datetime if possible (e.g., '2 days ago')
+                        posted_dt = None
+                        if posted_time:
+                            m = re.search(r'(\d+) day', posted_time)
+                            if m:
+                                days_ago = int(m.group(1))
+                                posted_dt = datetime.now() - timedelta(days=days_ago)
+                            elif 'today' in posted_time.lower():
+                                posted_dt = datetime.now()
+                        if posted_dt and posted_dt < since_time:
+                            continue
+                        tags = [keyword.lower(), 'wellfound']
+                        listings.append({
+                            'title': title,
+                            'company': company,
+                            'location': location,
+                            'work_type': '',
+                            'posted_time': posted_time,
+                            'deadline': '',
+                            'link': link,
+                            'tags': list(set(tags)),
+                            'source': 'Wellfound',
+                        })
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        print(f"[DEBUG] Wellfound: {len(listings)} roles fetched.")
+        return listings
+
+    def fetch_all(self, keywords, since_time):
+        """Fetch and combine all relevant listings from all sources."""
+        jobs = self.fetch_linkedin_jobs(keywords, since_time)
+        events = self.fetch_unstop_events(since_time)
+        internships = self.fetch_internshala_internships(keywords, since_time)
+        cuvette = self.fetch_cuvette_roles(keywords, since_time)
+        wellfound = self.fetch_wellfound_roles(keywords, since_time)
+        return jobs + events + internships + cuvette + wellfound 
