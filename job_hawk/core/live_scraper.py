@@ -950,72 +950,62 @@ class JobListingScraper:
         print(f"[DEBUG] LinkedIn: {len(listings)} jobs fetched.")
         return listings
 
-    def fetch_unstop_events(self, since_time):
-        """Fetch new hackathons, sprints, competitions from Unstop posted after since_time."""
-        import requests
-        from bs4 import BeautifulSoup
+    async def fetch_unstop_events_playwright(self, since_time, max_events=5):
+        from playwright.async_api import async_playwright
         from datetime import datetime
         import re
+        import asyncio
         listings = []
-        base_url = "https://unstop.com/competitions"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        try:
-            response = requests.get(base_url, headers=headers, timeout=15)
-            if response.status_code != 200:
-                return []
-            soup = BeautifulSoup(response.content, 'html.parser')
-            event_cards = soup.find_all('div', class_=re.compile(r'event-card|competition-card'))
-            for card in event_cards:
-                try:
-                    title_el = card.find('h3')
-                    org_el = card.find('div', class_=re.compile(r'organizer|org-name'))
-                    deadline_el = card.find('span', class_=re.compile(r'deadline|end-date'))
-                    team_size_el = card.find('span', class_=re.compile(r'team-size|team'))
-                    eligibility_el = card.find('span', class_=re.compile(r'eligibility|criteria'))
-                    link_el = card.find('a', href=True)
-                    title = title_el.get_text(strip=True) if title_el else ''
-                    company = org_el.get_text(strip=True) if org_el else ''
-                    deadline = deadline_el.get_text(strip=True) if deadline_el else ''
-                    team_size = team_size_el.get_text(strip=True) if team_size_el else ''
-                    eligibility = eligibility_el.get_text(strip=True) if eligibility_el else ''
-                    link = link_el['href'] if link_el else ''
-                    # Parse deadline to datetime if possible
-                    deadline_dt = None
-                    if deadline:
-                        try:
-                            deadline_dt = datetime.strptime(deadline, '%d %b %Y, %I:%M %p')
-                        except:
-                            deadline_dt = None
-                    # Only include if deadline is after now
-                    if deadline_dt and deadline_dt < datetime.now():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context()
+            page = await context.new_page()
+            try:
+                await page.goto('https://unstop.com/competitions', timeout=20000)
+                await page.wait_for_load_state('domcontentloaded', timeout=10000)
+                await page.wait_for_selector('main', timeout=10000)
+                # Scroll to bottom to trigger lazy loading
+                for _ in range(5):
+                    await page.mouse.wheel(0, 10000)
+                    await asyncio.sleep(1)
+                await asyncio.sleep(3)  # Wait for JS to render cards
+                html = await page.content()
+                with open('unstop_debug.html', 'w', encoding='utf-8') as f:
+                    f.write(html)
+                print('[DEBUG] Unstop: Saved loaded HTML to unstop_debug.html')
+                # Try to find event cards after scrolling
+                cards = await page.query_selector_all('a[href*="/competitions/"]')
+                for card in cards:
+                    try:
+                        title_el = await card.query_selector('h3, h2, span')
+                        title = await title_el.inner_text() if title_el else ''
+                        link = await card.get_attribute('href')
+                        # Organizer, deadline, etc. may be in sibling or parent nodes
+                        # For now, just print the title and link
+                        print(f"[DEBUG] Unstop event: {title} | {link}")
+                        listings.append({
+                            'title': title.strip(),
+                            'company': '',
+                            'location': '',
+                            'work_type': '',
+                            'posted_time': '',
+                            'deadline': '',
+                            'team_size': '',
+                            'eligibility': '',
+                            'link': link,
+                            'tags': ['hackathon', 'competition', 'unstop'],
+                            'source': 'Unstop',
+                        })
+                    except Exception as e:
+                        print(f"[DEBUG] Unstop (Playwright): Error parsing card: {e}")
                         continue
-                    # Only include if posted after since_time (Unstop may not show posted time, so skip if not available)
-                    tags = ['hackathon', 'competition', 'unstop']
-                    if team_size:
-                        tags.append('team')
-                    if eligibility:
-                        tags.append(eligibility.lower())
-                    listings.append({
-                        'title': title,
-                        'company': company,
-                        'location': '',
-                        'work_type': '',
-                        'posted_time': '',
-                        'deadline': deadline,
-                        'team_size': team_size,
-                        'eligibility': eligibility,
-                        'link': link,
-                        'tags': list(set(tags)),
-                        'source': 'Unstop',
-                    })
-                except Exception:
-                    continue
-        except Exception:
-            return []
-        print(f"[DEBUG] Unstop: {len(listings)} events fetched.")
-        return listings
+            except Exception as e:
+                print(f"[DEBUG] Unstop (Playwright): Error fetching competitions: {e}")
+            finally:
+                await context.close()
+                await browser.close()
+        print(f"[DEBUG] Unstop (Playwright): {len(listings)} events fetched.")
+        return listings[:max_events]
 
     def fetch_internshala_internships(self, keywords, since_time):
         """Fetch internships from Internshala matching keywords, posted after since_time."""
@@ -1204,10 +1194,9 @@ class JobListingScraper:
         print(f"[DEBUG] Wellfound: {len(listings)} roles fetched.")
         return listings
 
-    def fetch_all(self, keywords, since_time):
-        """Fetch and combine all relevant listings from all sources."""
+    async def fetch_all(self, keywords, since_time):
         jobs = self.fetch_linkedin_jobs(keywords, since_time)
-        events = self.fetch_unstop_events(since_time)
+        events = await self.fetch_unstop_events_playwright(since_time)
         internships = self.fetch_internshala_internships(keywords, since_time)
         cuvette = self.fetch_cuvette_roles(keywords, since_time)
         wellfound = self.fetch_wellfound_roles(keywords, since_time)

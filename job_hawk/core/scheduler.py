@@ -7,6 +7,7 @@ from .live_scraper import JobListingScraper
 import os
 from .telegram_exporter import TelegramExporter
 import google.generativeai as genai
+import asyncio
 
 def list_gemini_models():
     api_key = os.getenv('GEMINI_API_KEY')
@@ -52,7 +53,7 @@ class JobScheduler:
         print(f"🕐 Running job hunt at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         since_time = self.last_run_time or (datetime.now() - timedelta(hours=4))
         print("[DEBUG] Fetching from all sources...")
-        new_listings = self.scraper.fetch_all(self.keywords, since_time)
+        new_listings = asyncio.run(self.scraper.fetch_all(self.keywords, since_time))
         print(f"[DEBUG] Total listings fetched: {len(new_listings)}")
         for src in ['LinkedIn', 'Unstop', 'Internshala', 'Cuvette', 'Wellfound']:
             count = sum(1 for l in new_listings if l.get('source') == src)
